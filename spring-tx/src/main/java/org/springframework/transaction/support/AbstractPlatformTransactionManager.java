@@ -676,6 +676,7 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 
 
 	/**
+	 * 事务提交
 	 * This implementation of commit handles participating in existing
 	 * transactions and programmatic rollback requests.
 	 * Delegates to {@code isRollbackOnly}, {@code doCommit}
@@ -692,26 +693,33 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 		}
 
 		DefaultTransactionStatus defStatus = (DefaultTransactionStatus) status;
+		//如果事务连接中已经被标记回滚，那么不会尝试提交事务，直接回滚
 		if (defStatus.isLocalRollbackOnly()) {
 			if (defStatus.isDebug()) {
 				logger.debug("Transactional code has requested rollback");
 			}
+			//不可预期的回滚
 			processRollback(defStatus, false);
 			return;
 		}
-
+		//设置了全局回滚
 		if (!shouldCommitOnGlobalRollbackOnly() && defStatus.isGlobalRollbackOnly()) {
 			if (defStatus.isDebug()) {
 				logger.debug("Global transaction is marked as rollback-only but transactional code requested commit");
 			}
+			//可预期回滚，可能会报异常
 			processRollback(defStatus, true);
 			return;
 		}
-
+		//处理事务提交
 		processCommit(defStatus);
 	}
 
 	/**
+	 * 处理事务提交，先处理保存点，然后处理新事物。如果不是新事务不会进行真正的提交，要等外层是新事物才提交
+	 * 最后根据条件执行数据清除，线程私有资源解绑，重置连接自动提交，隔离级别，是否只读。释放连接，恢复挂起事务等
+	 *
+	 *
 	 * Process an actual commit.
 	 * Rollback-only flags have already been checked and applied.
 	 * @param status object representing the transaction
@@ -723,23 +731,31 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 
 			try {
 				boolean unexpectedRollback = false;
+				//预留
 				prepareForCommit(status);
+				//添加TransactionSyncchronization中对应方法的调用
 				triggerBeforeCommit(status);
+				//提交完成前回调
 				triggerBeforeCompletion(status);
 				beforeCompletionInvoked = true;
 
+				//有保存点
 				if (status.hasSavepoint()) {
 					if (status.isDebug()) {
 						logger.debug("Releasing transaction savepoint");
 					}
+					//是否有全局回滚标记
 					unexpectedRollback = status.isGlobalRollbackOnly();
+					//如果存在保存点，清除保存点信息
 					status.releaseHeldSavepoint();
 				}
+				//当前状态是新事物
 				else if (status.isNewTransaction()) {
 					if (status.isDebug()) {
 						logger.debug("Initiating transaction commit");
 					}
 					unexpectedRollback = status.isGlobalRollbackOnly();
+					//如果是独立的新事物，直接提交
 					doCommit(status);
 				}
 				else if (isFailEarlyOnGlobalRollbackOnly()) {
@@ -792,6 +808,7 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 	}
 
 	/**
+	 * 事务管理器根据事务的状态来进行事务回滚
 	 * This implementation of rollback handles participating in existing
 	 * transactions. Delegates to {@code doRollback} and
 	 * {@code doSetRollbackOnly}.
@@ -810,6 +827,11 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 	}
 
 	/**
+	 * unexpected一般都是false,除非设置了rollback-only=true 才是true,表示是全局的回滚标记，首先会进行回滚前的回调
+	 * 然后判断是否设置了保存点，比如事务传播属性为`NESTED`时会设置保存点；如果事务是新事物，那就进行回滚，如果不是新的，就设置一个回滚标记
+	 * 内部是设置连接持有器回滚标记，然后回滚完成回调。根据事务状态信息，完成数据清除和线程私有资源解除
+	 * 重置连接自动提交，隔离级别，是否只读，释放连接，恢复挂起事务等。
+	 *
 	 * Process an actual rollback.
 	 * The completed flag has already been checked.
 	 * @param status object representing the transaction
@@ -817,21 +839,25 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 	 */
 	private void processRollback(DefaultTransactionStatus status, boolean unexpected) {
 		try {
+			//意外的回滚
 			boolean unexpectedRollback = unexpected;
 
 			try {
+				//回滚完成前回调
 				triggerBeforeCompletion(status);
-
+				//有保存点，回滚到保存点
 				if (status.hasSavepoint()) {
 					if (status.isDebug()) {
 						logger.debug("Rolling back transaction to savepoint");
 					}
 					status.rollbackToHeldSavepoint();
 				}
+				//当前事务是一个新事务
 				else if (status.isNewTransaction()) {
 					if (status.isDebug()) {
 						logger.debug("Initiating transaction rollback");
 					}
+					//进行回滚
 					doRollback(status);
 				}
 				else {
@@ -841,6 +867,7 @@ public abstract class AbstractPlatformTransactionManager implements PlatformTran
 							if (status.isDebug()) {
 								logger.debug("Participating transaction failed - marking existing transaction as rollback-only");
 							}
+							//设置连接要回滚的标记，也就是全局回滚
 							doSetRollbackOnly(status);
 						}
 						else {
