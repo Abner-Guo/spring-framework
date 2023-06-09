@@ -366,6 +366,7 @@ configure([rootProject] + javaProjects) { project ->
 		compileOnly("com.google.code.findbugs:jsr305")
 		testCompileOnly("com.google.code.findbugs:jsr305")
 		checkstyle("io.spring.javaformat:spring-javaformat-checkstyle:0.0.31")
+		//checkstyle("org.jetbrains.kotlin:kotlin-gradle-plugin:1.3.72")
 	}
 
 	ext.javadocLinks = [
